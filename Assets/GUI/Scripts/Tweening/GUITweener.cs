@@ -6,7 +6,7 @@ using System.Collections.Generic;
 /// Base class for all tweening operations.
 /// </summary>
 /// 
-public class GUITweener : MonoBehaviour 
+public abstract class GUITweener : MonoBehaviour 
 {
     /// <summary>
     /// Current tween that triggered the callback function.
@@ -18,6 +18,7 @@ public class GUITweener : MonoBehaviour
     { 
         Linear,
         EaseIn,
+        EaseOut,
         EaseInOut,
         BounceIn,
         BounceOut,
@@ -294,5 +295,207 @@ public class GUITweener : MonoBehaviour
     /// Sample the tween at the specified factor.
     /// </summary>
 
+    public void Sample(float factor, bool isFinished)
+    { 
+        // Calculate the sampling value
+        float val = Mathf.Clamp01(factor);
+
+        if (method == Method.EaseIn)
+        {
+            val = 1f - Mathf.Sin(0.5f * Mathf.PI * (1f - val));
+            if (steeperCurves)
+                val *= val;
+        }
+        else if (method == Method.EaseOut)
+        {
+            val = Mathf.Sin(0.5f * Mathf.PI * val);
+
+            if (steeperCurves)
+            {
+                val = 1f - val;
+                val = 1f - val * val;
+            }
+        }
+        else if (method == Method.EaseInOut)
+        {
+            const float pi2 = Mathf.PI * 2f;
+            val = val - Mathf.Sin(val * pi2) / pi2;
+
+            if (steeperCurves)
+            {
+                val = val * 2f - 1f;
+                float sign = Mathf.Sign(val);
+                val = 1f - Mathf.Abs(val);
+                val = 1f - val * val;
+
+            }
+        }
+        else if (method == Method.BounceIn)
+        {
+            val = BounceLogic(val);
+        }
+        else if (method == Method.BounceOut)
+        {
+            val = 1f - BounceLogic(1f - val);
+        }
+
+        // Call the virtual update
+        OnUpdate((animationCurve != null) ? animationCurve.Evaluate(val) : val, isFinished);
+    }
+
+    /// <summary>
+    /// Main Bounce logic to simplify the Sample function
+    /// </summary>
+
+    float BounceLogic(float val)
+    {
+        if (val < 0.363636f) // 0.363636 = (1/ 2.75)
+        {
+            val = 7.5685f * val * val;
+        }
+        else if (val < 0.727272f) // 0.727272 = (2 / 2.75)
+        {
+            val = 7.5625f * (val -= 0.545454f) * val + 0.75f; // 0.545454f = (1.5 / 2.75) 
+        }
+        else if (val < 0.909090f) // 0.909090 = (2.5 / 2.75) 
+        {
+            val = 7.5625f * (val -= 0.818181f) * val + 0.9375f; // 0.818181 = (2.25 / 2.75) 
+        }
+        else
+        {
+            val = 7.5625f * (val -= 0.9545454f) * val + 0.984375f; // 0.9545454 = (2.625 / 2.75) 
+        }
+        return val;
+    }
+
+    /// <summary>
+    /// Play the tween.
+    /// </summary>
+
+    [System.Obsolete("Use Playforward() instead")]
+    public void Play() { Play(true); }
+
+    /// <summary>
+    /// Play the tween forward.
+    /// </summary>
+
+    public void PlayForward() { Play(true); }
+
+    /// <summary>
+    /// Play the tween in reverse.
+    /// </summary>
+
+    public void PlayReverse() { Play(false); }
+
+    /// <summary>
+    /// Manually activate the tweening process, reversing it if necessary.
+    /// </summary>
+
+    public void Play(bool forward)
+    {
+        mAmountPerDelta = Mathf.Abs(amountPerDelta);
+        if (!forward) 
+            mAmountPerDelta = -mAmountPerDelta;
+        enabled = true;
+        Update();
+    }
+
+    /// <summary>
+    /// Manually reset the tweener's state to the beginning.
+    /// If the tween is playing forward, this means the tween's start.
+    /// If the tween is playing in reverse, this means the tween's end.
+    /// </summary>
+
+    public void ResetToBeginning()
+    {
+        mStarted = false;
+        mFactor = (amountPerDelta < 0f) ? 1f : 0f;
+        Sample(mFactor, false);
+    }
+
+    /// <summary>
+    /// Manually start the tweening process, reversing its direction.
+    /// </summary>
+
+    public void Toggle()
+    {
+        if (mFactor > 0f)
+        {
+            mAmountPerDelta = -amountPerDelta;
+        }
+        else
+        {
+            mAmountPerDelta = Mathf.Abs(amountPerDelta);
+        }
+
+        enabled = true;
+    }
+
+    /// <summary>
+    /// Actual tweening logic should go here.
+    /// </summary>
+
+    abstract protected void OnUpdate(float factor, bool isFinished);
+
+    /// <summary>
+    /// Starts the tweening operation.
+    /// </summary>
+
+    static public T Begin<T>(GameObject go, float duration) where T : GUITweener
+    {
+        T comp = go.GetComponent<T>();
+#if UNITY_FLASH
+        if ((object)comp == null) comp = (T)go.AddComponent<T>();
+#else
+        // Find the tween with an unset group ID (group ID of 0).
+        if (comp != null && comp.tweenGroup != 0)
+        {
+            comp = null;
+            T[] comps = go.GetComponents<T>();
+            for (int i = 0, imax = comps.Length; i < imax; ++i)
+            {
+                comp = comps[i];
+                if (comp != null && comp.tweenGroup == 0)
+                    break;
+                comp = null;
+            }
+        }
+
+        if (comp == null)
+        {
+            comp = go.AddComponent<T>();
+
+            if (comp == null)
+            {
+                Debug.LogError("Unable to add " + typeof(T) + " to " + NGUITools.GetHierarchy(go), go);
+                return null;
+            }
+        }
+#endif
+        comp.mStarted = false;
+        comp.duration = duration;
+        comp.mFactor = 0f;
+        comp.mAmountPerDelta = Mathf.Abs(comp.amountPerDelta);
+        comp.style = Style.Once;
+        comp.animationCurve = new AnimationCurve(new Keyframe(0f, 0f, 0f, 1f), new Keyframe(1f, 1f, 1f, 0f));
+        comp.eventReceiver = null;
+        comp.callWhenFinished = null;
+        comp.enabled = true;
+        return comp;
+
+
+    }
+
+    /// <summary>
+    /// Set the 'from' value to the current one.
+    /// </summary>
+
+    public virtual void SetStartToCurrentValue() { }
+
+    /// <summary>
+    /// Set the 'to' value to the current one.
+    /// </summary>
+
+    public virtual void SetEndToCurrentValue() { }
 
 }
